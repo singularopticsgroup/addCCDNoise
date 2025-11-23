@@ -30,49 +30,87 @@ function image_signal = addCDDNoise(image_irrad, params)
     %
     % Returns:
     %   image_signal (matrix): Final image with added noise, normalized by ADC maximum.
-    image_irrad=image_irrad-min(image_irrad(:));
-    image_irrad=image_irrad/max(image_irrad(:));
-    assert(ndims(image_irrad) == 2, 'The image should be grayscale (2D matrix).');
-    assert(isMatrixNormalized(image_irrad), 'The image should be normalized (values between 0 and 1).');
-
-    if nargin < 2
+    % Validate inputs
+    assert(ndims(image_irrad) == 2, 'Image should be grayscale (2D matrix)');
+    
+    % Check for negative values 
+    if any(image_irrad(:) < 0)
+        warning('Image contains negative values (min=%.4f). This may indicate improper normalization.', min(image_irrad(:)));
+        % Clip negative values to zero to proceed
+        image_irrad = max(image_irrad, 0);
+    end
+    
+    if nargin < 2 || isempty(params)
         params = struct();
     end
     params = setDefaultParams(params);
     params.size_image = size(image_irrad);
     
-    % Photon section
-    image_photons = convertIrrad2Photons(image_irrad, params);
+    if nargin < 3 || isempty(reference_total_power)
+        % If no reference provided, use this image's total power
+        reference_total_power = sum(image_irrad(:));
+    end
     
-    % Electron section
-    image_electrons = convertPhotons2Electrons(image_photons, params);
-    image_dark_signal_noise = calcDarkSignal(params);
+    % Calculate actual total power of this image
+    total_power_this_image = sum(image_irrad(:));
     
+    if total_power_this_image == 0
+        error('Image has zero total power - cannot process');
+    end
+    
+    % KEY DIFFERENCE: Calculate photon count based on TOTAL power, not peak
+    % We want: same reference_total_power → same total photons
+    % regardless of different peak intensities
+    
+    % Define reference: what does reference_total_power=1.0 mean in photons?
+    % Use full well capacity as the reference
+    photons_per_unit_power = (params.full_well_capacity / params.quantum_efficiency) * params.exposure_time;
+    
+    % Calculate total photons based on reference power 
+    total_photons_target = reference_total_power * photons_per_unit_power;
+    
+    % Distribute these photons according to THIS image's spatial profile
+    % Normalize spatial distribution so it sums to 1.0
+    spatial_distribution = image_irrad / total_power_this_image;
+    
+    % Apply the target photon count to this spatial distribution
+    image_photons = spatial_distribution * total_photons_target;
+    
+    % Sanity check: verify total photon count matches target
+    actual_total = sum(image_photons(:));
+    if abs(actual_total - total_photons_target) / total_photons_target > 0.01
+        warning('Photon count error: expected %.1f, got %.1f (%.1f%% error)', ...
+            total_photons_target, actual_total, 100*abs(actual_total - total_photons_target)/total_photons_target);
+    end
+    
+    % Convert photons to electrons with Poisson noise (shot noise)
+    image_electrons = poissrnd(image_photons * params.quantum_efficiency);
+    
+    % Add dark signal noise
+    image_dark_signal_noise = poissrnd(params.dark_current * params.exposure_time, params.size_image);
     image_electrons = image_electrons + image_dark_signal_noise;
     
-    image_read_noise = calcReadNoise(params);
+    % Add read noise (Gaussian)
+    image_read_noise = randn(params.size_image) * params.read_noise;
     image_electrons = image_electrons + image_read_noise;
     
-    image_electrons = min(image_electrons, params.full_well_capacity); % Limit number of electrons to CCD limit
-
-    % Voltage and signal section
-    image_voltage = convertElectron2Voltage(image_electrons, params);
-
+    % Clip to full well capacity
+    image_electrons = min(image_electrons, params.full_well_capacity);
+    image_electrons = max(image_electrons, 0);  % No negative electrons
+    
+    % Convert electrons to voltage (with gain)
+    image_voltage = image_electrons * params.gain;
+    
+    % ADC quantization
+    image_voltage = round(image_voltage);
+    image_voltage = min(image_voltage, params.adc_max);
+    
+    % Normalize by ADC max to get final signal
     image_signal = image_voltage / params.adc_max;
 end
 
 function params = setDefaultParams(params)
-    % SETDEFAULTPARAMS Sets default values for CCD simulation parameters.
-    %
-    % This function initializes the parameters structure with default values for
-    % the CCD simulation. If a parameter is already specified, it remains unchanged.
-    %
-    % Parameters:
-    %   params (struct): Structure to be updated with default values.
-    %
-    % Returns:
-    %   params (struct): Updated structure with default parameter values.
-
+    % Set default CCD parameters (same as original addCDDNoise)
     fields_and_values = {
         'pixel_size', 10;
         'exposure_time', 0.1;
@@ -87,127 +125,11 @@ function params = setDefaultParams(params)
         'wavelength', 550e-9;
     };
     
-    for ind = 1 : size(fields_and_values, 1)
+    for ind = 1:size(fields_and_values, 1)
         field_name = fields_and_values{ind, 1};
         field_value = fields_and_values{ind, 2};
         if ~isfield(params, field_name)
             params.(field_name) = field_value;
         end
     end
-end
-
-function bool = isMatrixNormalized(matrix)
-    % ISMATRIXNORMALIZED Checks if the matrix values are normalized between 0 and 1.
-    %
-    % This function verifies that all elements in the input matrix are within
-    % the normalized range [0, 1].
-    %
-    % Parameters:
-    %   matrix (matrix): Input matrix to be checked.
-    %
-    % Returns:
-    %   bool (boolean): True if all values are in the range [0, 1], otherwise false.
-
-    bool = all(matrix(:) >= 0) && all(matrix(:) <= 1);
-end
-
-function estimated_photons = convertIrrad2Photons(image_irrad, params)
-    % CONVERTIRRAD2PHOTONS Converts irradiation values to photon counts.
-    %
-    % This function estimates the number of photons based on the input irradiation
-    % values, using the quantum efficiency and full well capacity of the CCD.
-    % 
-    % Equation:
-    %   Photon Flux = Irradiation * (Full Well Capacity / Quantum Efficiency)
-    %   Estimated Photons = Photon Flux * Exposure Time
-    %
-    % Parameters:
-    %   image_irrad (matrix): Grayscale image with irradiation values normalized to [0, 1].
-    %   params (struct): Parameters including full_well_capacity, quantum_efficiency, and exposure_time.
-    %
-    % Returns:
-    %   estimated_photons (matrix): Image with estimated photon counts.
-
-    photon_flux = image_irrad * (params.full_well_capacity / params.quantum_efficiency);
-    estimated_photons = photon_flux * params.exposure_time;
-end
-
-function image_electrons = convertPhotons2Electrons(image_photons, params)
-    % CONVERTPHOTONS2ELECTRONS Converts photon counts to electron counts using Poisson distribution.
-    %
-    % This function simulates the conversion from photons to electrons, incorporating
-    % quantum efficiency. The conversion is modeled using a Poisson distribution.
-    % 
-    % Equation:
-    %   Electrons = Poisson(Photons * Quantum Efficiency)
-    %
-    % Parameters:
-    %   image_photons (matrix): Image with photon counts.
-    %   params (struct): Parameters including quantum_efficiency.
-    %
-    % Returns:
-    %   image_electrons (matrix): Image with electron counts.
-
-    image_electrons = poissrnd(image_photons * params.quantum_efficiency);
-end
-
-function image_dark_signal = calcDarkSignal(params)
-    % CALCDARKSIGNAL Calculates the dark signal noise for the image.
-    %
-    % This function simulates the dark signal noise by generating Poisson noise
-    % based on the dark current rate and exposure time.
-    %
-    % Equations:
-    %   Dark Signal Noise = Poisson(Dark Current * Exposure Time)
-    %
-    % Parameters:
-    %   params (struct): Parameters including dark_current and exposure_time.
-    %
-    % Returns:
-    %   image_dark_signal (matrix): Image with simulated dark signal noise.
-
-    image_dark_signal = poissrnd(params.dark_current * params.exposure_time, ...
-                                params.size_image);
-end
-
-function image_read_noise = calcReadNoise(params)
-    % CALCREADNOISE Generates read noise for the image.
-    %
-    % This function simulates the read noise by generating Gaussian noise based on
-    % the read noise parameter.
-    %
-    % Equation:
-    %   Read Noise = Gaussian(0, Read Noise Standard Deviation)
-    %
-    % Parameters:
-    %   params (struct): Parameters including read_noise.
-    %
-    % Returns:
-    %   image_read_noise (matrix): Image with simulated read noise.
-
-    image_read_noise = randn(params.size_image) * params.read_noise;
-end
-
-function image_voltage = convertElectron2Voltage(image_electrons, params)
-    % CONVERTELECTRON2VOLTAGE Converts electron counts to voltage values.
-    %
-    % This function converts the number of electrons to voltage values, applies gain,
-    % and quantizes the voltage values based on the ADC maximum.
-    %
-    % Equation:
-    %   Voltage = Round(Electrons * Gain)
-    %   Quantized Voltage = Min(Voltage, ADC Max)
-    %
-    % Parameters:
-    %   image_electrons (matrix): Image with electron counts.
-    %   params (struct): Parameters including gain and adc_max.
-    %
-    % Returns:
-    %   image_voltage (matrix): Image with voltage values, quantized to ADC range.
-
-    image_voltage = image_electrons * params.gain;
-    
-    % Quantization
-    image_voltage = round(image_voltage);
-    image_voltage = min(image_voltage, params.adc_max);
 end
