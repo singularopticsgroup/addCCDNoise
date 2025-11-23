@@ -1,42 +1,44 @@
+This function simulates realistic noise in CCD/CMOS sensor images based on incident irradiation, following the complete signal chain from photons to digital output.
+📚 References
+Theoretical Foundation:
+M. Konnik and J. Welsh, "High-level numerical simulations of noise in ccd and cmos photosensors: review and tutorial," arXiv (2014).
+Code Implementation:
+Kamil Kalinowski
+Applied in:
+Magdalena Łukowicz, Aleksandra Korzeniewska, Kamil Kalinowski, Rafał Cichowski, Rosario Porras-Aguilar, and Mateusz Szatkowski, "Accurate and Noise-Robust Wavefront Reconstruction with an Optical Vortex Wavefront Sensor", arXiv:2510.07998 (2025).
+
+🔬 Overview
+The simulation models the complete CCD/CMOS sensor pipeline:
+
+Photon arrival → Convert irradiation to photon counts (Eq. 12)
+Photoelectric conversion → Convert photons to electrons via quantum efficiency (Eq. 13)
+Dark signal noise → Add thermally-generated electrons (Eq. 16, 17)
+Read noise → Add electronic readout noise (Eq. 23)
+Analog-to-digital conversion → Convert electrons to voltage and digitize (Eq. 35)
 
 
-This functions simulates the effect of noise in a CCD image based on irradiation. It is based on the work:
-M. Konnik and J. Welsh, “High-level numerical simulations of noise in ccd and cmos photosensors: review and tutorial,” arXiv (2014). 
+📥 Input Parameters
+image_irrad (matrix)
+Input grayscale image representing incident irradiation, normalized to [0, 1].
+params (struct)
+Camera sensor parameters:
+ParameterDescriptionUnitspixel_sizePhysical pixel dimensionμmexposure_timeIntegration timesquantum_efficiencyPhotoelectric conversion efficiency(dimensionless, 0–1)full_well_capacityMaximum electron storage per pixele⁻gainADC conversion gainADU/e⁻read_noiseElectronic noise standard deviatione⁻ RMSdark_currentThermal electron generation ratee⁻/sadc_maxMaximum digital output valueADUhPlanck's constantJ·s (default: 6.62607015×10⁻³⁴)cSpeed of lightm/s (default: 299792458)wavelengthOperating wavelengthm (default: 550×10⁻⁹)
 
-Code implementation is authored by: Kamil Kalinowski
+📤 Output
+image_signal (matrix)
+Final noisy image with all noise sources included, normalized by adc_max to represent the digitized sensor output.
 
-Applied in the work: 
-Magdalena Łukowicz, Aleksandra Korzeniewska, Kamil Kalinowski, Rafał Cichowski, Rosario Porras-Aguilar, and Mateusz Szatkowski, “Accurate and Noise-Robust Wavefront Reconstruction with an Optical Vortex Wavefront Sensor“, arXiv:2510.07998 (2025).
-  
- This function simulates the complete noise addition process in a CCD image,
-starting from the irradiation values. It adds photon noise, dark signal noise,
-read noise, and then converts the results into voltage values, which are
-normalized by the ADC maximum value.
+💡 Usage Example in Matlab
 
-The simulation includes:
-- Conversion from irradiation to photon counts (Eq. 12)
-- Conversion from photon counts to electrons (Eq. 13)
-- Adding dark signal noise (Eq. 16, 17)
-- Adding read noise (Eq. 23)
-- Conversion from electrons to voltage (Eq. 35)
+% Define camera parameters
+params.pixel_size = 10;              % μm
+params.exposure_time = 0.1;          % s
+params.quantum_efficiency = 0.7;     % 70%
+params.full_well_capacity = 30000;   % e⁻
+params.gain = 2;                     % ADU/e⁻
+params.read_noise = 5;               % e⁻ RMS
+params.dark_current = 0.1;           % e⁻/s
+params.adc_max = 2^14 - 1;          % 14-bit ADC
 
-Parameters:
-image_irrad (matrix): Input grayscale image with irradiation values (normalized to [0, 1]).
-params (struct): Parameters for noise simulation, including:
-- pixel_size (scalar): Size of the pixel in micrometers.
-- exposure_time (scalar): Exposure time in seconds.
-- quantum_efficiency (scalar): Quantum efficiency of the CCD sensor.
-- full_well_capacity (scalar): Maximum number of electrons a pixel can hold.
-- gain (scalar): Gain of the CCD.
-- read_noise (scalar): Standard deviation of the read noise.
-- dark_current (scalar): Dark current rate in electrons per second.
-- adc_max (scalar): Maximum ADC value.
-- h (scalar): Planck's constant (default: 6.62607015e-34 J·s).
-- c (scalar): Speed of light (default: 299792458 m/s).
-- wavelength (scalar): Wavelength of the light (default: 550e-9 m).
-
-Returns:
-image_signal (matrix): Final image with added noise, normalized by ADC maximum.
-
-Algorithm: M. Konnik and J. Welsh, “High-level numerical simulations of noise in ccd and cmos photosensors: review and tutorial,” arXiv (2014).
-Implementation: Kamil Kalinowski
+% Add noise to normalized irradiance image
+noisy_image = addCCDNoise(clean_image, params);
