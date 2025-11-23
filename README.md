@@ -1,4 +1,12 @@
-Simulates the effect of noise in a CCD image based on irradiation.
+
+
+This functions simulates the effect of noise in a CCD image based on irradiation. It is based on the work:
+M. Konnik and J. Welsh, “High-level numerical simulations of noise in ccd and cmos photosensors: review and tutorial,” arXiv (2014). 
+
+Code implementation is authored by: Kamil Kalinowski
+
+Applied in the work: 
+Magdalena Łukowicz, Aleksandra Korzeniewska, Kamil Kalinowski, Rafał Cichowski, Rosario Porras-Aguilar, and Mateusz Szatkowski, “Accurate and Noise-Robust Wavefront Reconstruction with an Optical Vortex Wavefront Sensor“, arXiv:2510.07998 (2025).
   
  This function simulates the complete noise addition process in a CCD image,
 starting from the irradiation values. It adds photon noise, dark signal noise,
